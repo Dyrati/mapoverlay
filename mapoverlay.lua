@@ -42,10 +42,8 @@ controls = {
 
 -- colormap consists of entries of the form {color, value1, value2, value3, ...}
 -- the values may be numbers, or ranges of the form {lower, upper}, or preset strings
---     presets: "unknown", "door", "on_contact", "on_interact", "wall", "other"
 -- the color will be applied to each corresponding value/range/preset
--- entries farther down on the list have higher priority
-colormap = {
+colormap = {    -- presets: "unknown", "door", "on_contact", "on_interact", "wall", "other"
     {0xFFFFFFFF, "unknown"},
     {0x8000C0FF, "other"},
     {0x00FF00FF, "on_contact"},
@@ -68,6 +66,7 @@ print("shift + L\t\ttoggle relative vs absolute height")
 print("shift + /\t\ttoggle heads up display")
 
 ---------------------
+
 
 GAME = {}
 function GAME:update()
@@ -272,56 +271,49 @@ function signed(value, bitcount)
     return bit.bxor(value, 2^(bitcount-1)) - 2^(bitcount-1)
 end
 
-function get_height(tileaddr)
-    local h_index, pc_height
+function get_h_index(tileaddr)
     if GAME.ROM == "Golden_Sun_A" then
-        local pc_data_addr = memory.readdword(GAME.pcdata_pntr)
-        pc_height = bit.arshift(memory.readwordsigned(pc_data_addr + 0x16), 4)
-        h_index = memory.readbyte(tileaddr+3)
+        return memory.readbyte(tileaddr+3)
     elseif GAME.ROM == "GOLDEN_SUN_B" then
         local pc_data_addr = memory.readdword(GAME.pcdata_pntr)
-        pc_height = bit.arshift(memory.readwordsigned(pc_data_addr + 0x16), 4)
         local layer = memory.readbyte(pc_data_addr + 0x22)
         local layer_header = memory.readdword(0x03000020) + 0x138 + layer*0x38
         local base_addr = memory.readdword(layer_header)
         local height_addr = memory.readdword(layer_header + 4)
-        local tile_offset = math.floor((tileaddr - base_addr)/4)
-        h_index = memory.readbyte(height_addr + tile_offset)
+        local tile_offset = bit.arshift(tileaddr - base_addr, 2)
+        return memory.readbyte(height_addr + tile_offset)
     end
+end
+
+function get_height(tileaddr)
+    local pc_data_addr = memory.readdword(GAME.pcdata_pntr)
+    local pc_height = bit.arshift(memory.readwordsigned(pc_data_addr + 0x16), 4)
+    local h_index = get_h_index(tileaddr)
     local tile_type, h1, h2, h3 = unpack(memory.readbyterange(0x0202C000 + 4*h_index, 4))
     h1, h2, h3 = bit.arshift(signed(h1, 8),1), bit.arshift(signed(h2, 8),1), bit.arshift(signed(h3, 8),1)
     tile_type = bit.band(tile_type, 0xF)
-    if tile_type == 0 then
-        return h1
-    elseif index({1,2,8,9}, tile_type) then
-        return bit.arshift(h1 + h2, 1)
+    if tile_type == 0 then return h1
+    elseif index({1,2,8,9}, tile_type) then return bit.arshift(h1 + h2, 1)
     elseif index({3,4}, tile_type) then
-        if pc_height < math.max(h1, h2) then
-            return math.min(h1, h2)
-        else
-            return math.max(h1, h2)
+        if pc_height < math.max(h1, h2) then return math.min(h1, h2)
+        else return math.max(h1, h2)
         end
-    elseif tile_type == 7 then
-        return h2
-    elseif index({10,11,12,13,15}, tile_type) then
-        return bit.arshift(2*h1 + h2 + h3, 2)
-    elseif tile_type == 14 then
-        return bit.arshift(h1 + h2 + 2*h3, 2)
-    else
-        return h1
+    elseif tile_type == 7 then return h2
+    elseif index({10,11,12,13,15}, tile_type) then return bit.arshift(2*h1 + h2 + h3, 2)
+    elseif tile_type == 14 then return bit.arshift(h1 + h2 + 2*h3, 2)
+    else return h1
     end
 end
 
 function height_text(x, y, text, color, height)
     local step
-    if height == 0 then
-        gui.text(x, y, text, color); return
-    elseif height > 0 then
-        step = 1
-    else
-        step = -1
+    if height == 0 then gui.text(x, y, text, color); return
+    elseif height > 0 then step = 1
+    else step = -1
     end
-    if bit.arshift(color, 8) == 0 then color = 0xFFFFFFE0 end
+    if bit.rshift(color, 8) == 0 and color ~= flash.color then
+        color = 0xFFFFFFE0
+    end
     for i=0,height,step do
         gui.text(x-i, y-i, text, color, 0xE0)
     end
@@ -372,7 +364,6 @@ while true do
             coord_mult = 0x100000
         end
         local xcurrent, ycurrent = memory.readdword(xaddr), memory.readdword(yaddr)
-        if hud then show_tiledata(2, 2, "Tile:  ", {xcurrent, ycurrent, currentaddr}) end
 
         if pixmap then
             local overlaysize = math.floor(pixmapsize/zoom)
@@ -419,6 +410,7 @@ while true do
             is_hovering, xdiff, ydiff = hover_check(center, {12, 10}, hexmapsize)
         end
 
+        if hud then show_tiledata(2, 2, "Tile:  ", {xcurrent, ycurrent, currentaddr}) end
         if is_hovering then
             local hoveraddr = currentaddr + x_interval*xdiff + y_interval*ydiff
             local hovervalue = memory.readbyte(hoveraddr+2)
