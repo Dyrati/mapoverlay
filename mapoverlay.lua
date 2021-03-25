@@ -1,9 +1,15 @@
+-- Created by Dyrati
+-- Thanks to Teawater for the very first version of this script,
+-- and for providing useful info that helped improve it
+
+
 -- Customizeable Region --
 
 zoomlevel = 1       -- Starting zoom level
 zoomrange = 3       -- Maximum zoom level
 hexmap = false      -- Initial state of hexmap
 pixmap = false      -- Initial state of pixelmap
+hud = true          -- Heads up display
 hexcoords = true    -- How to display x,y (exact hex or decimal)
 
 center = {120, 88}  -- coordinates of center of overlays
@@ -31,7 +37,7 @@ controls = {
     increase  = {"control", "period"},
     decrease  = {"control", "comma"},
     relheight = {"shift", "L"},
-    hexcoords = {"shift", "N"},
+    hud       = {"shift", "slash"},
 }
 
 -- colormap consists of entries of the form {color, value1, value2, value3, ...}
@@ -49,16 +55,17 @@ colormap = {
     {0x00000080, 0},
 }
 
-print("Golden Sun 1 & 2 Map Overlay Script\tupdated March 25, 2021")
+print("Golden Sun 1 & 2 Map Overlay Script")
+print("Updated March 25, 2021")
 print("")
 print("shift + O\t\ttoggle hex overlay")
 print("shift + P\t\ttoggle pixel overlay")
 print("shift + ; or '\tzoom in/out on pixel map")
 print("shift + click\tteleport to position of cursor")
 print("ctrl + click\tmake selected value flash")
-print("ctrl + . or ,\tincrease/decrease value of tile hovered over")
+print("ctrl + . or ,\tEdit value of tile hovered over")
 print("shift + L\t\ttoggle relative vs absolute height")
-print("shift + N\t\ttoggle x,y display type")
+print("shift + /\t\ttoggle heads up display")
 
 ---------------------
 
@@ -266,11 +273,14 @@ function signed(value, bitcount)
 end
 
 function get_height(tileaddr)
-    local h_index
+    local h_index, pc_height
     if GAME.ROM == "Golden_Sun_A" then
+        local pc_data_addr = memory.readdword(GAME.pcdata_pntr)
+        pc_height = bit.arshift(memory.readwordsigned(pc_data_addr + 0x16), 4)
         h_index = memory.readbyte(tileaddr+3)
     elseif GAME.ROM == "GOLDEN_SUN_B" then
-        local pc_data_addr = memory.readdword(0x03000014)
+        local pc_data_addr = memory.readdword(GAME.pcdata_pntr)
+        pc_height = bit.arshift(memory.readwordsigned(pc_data_addr + 0x16), 4)
         local layer = memory.readbyte(pc_data_addr + 0x22)
         local layer_header = memory.readdword(0x03000020) + 0x138 + layer*0x38
         local base_addr = memory.readdword(layer_header)
@@ -279,15 +289,26 @@ function get_height(tileaddr)
         h_index = memory.readbyte(height_addr + tile_offset)
     end
     local tile_type, h1, h2, h3 = unpack(memory.readbyterange(0x0202C000 + 4*h_index, 4))
-    h1, h2, h3 = signed(h1, 8), signed(h2, 8), signed(h3, 8)
+    h1, h2, h3 = bit.arshift(signed(h1, 8),1), bit.arshift(signed(h2, 8),1), bit.arshift(signed(h3, 8),1)
     tile_type = bit.band(tile_type, 0xF)
-    local height
-    if index({1,2,8,9}, tile_type) then
-        return bit.arshift(h1 + h2, 2)
-    elseif 7 == tile_type then
-        return bit.arshift(h2, 1)
+    if tile_type == 0 then
+        return h1
+    elseif index({1,2,8,9}, tile_type) then
+        return bit.arshift(h1 + h2, 1)
+    elseif index({3,4}, tile_type) then
+        if pc_height < math.max(h1, h2) then
+            return math.min(h1, h2)
+        else
+            return math.max(h1, h2)
+        end
+    elseif tile_type == 7 then
+        return h2
+    elseif index({10,11,12,13,15}, tile_type) then
+        return bit.arshift(2*h1 + h2 + h3, 2)
+    elseif tile_type == 14 then
+        return bit.arshift(h1 + h2 + 2*h3, 2)
     else
-        return bit.arshift(h1, 1)
+        return h1
     end
 end
 
@@ -328,9 +349,9 @@ while true do
         heightmap.relative = not heightmap.relative
         timed_display(2,152, "relheight: "..tostring(heightmap.relative), 90)
     end
-    if keycheck("hexcoords") then
-        hexcoords = not hexcoords
-        timed_display(2,152, "hexcoords: "..tostring(hexcoords), 90)
+    if keycheck("hud") then
+        hud = not hud
+        timed_display(2,152, "hud: "..tostring(hud), 90)
     end
 
     local currentaddr = memory.readdword(GAME.tilepntr)
@@ -351,7 +372,7 @@ while true do
             coord_mult = 0x100000
         end
         local xcurrent, ycurrent = memory.readdword(xaddr), memory.readdword(yaddr)
-        show_tiledata(2, 2, "Tile:  ", {xcurrent, ycurrent, currentaddr})
+        if hud then show_tiledata(2, 2, "Tile:  ", {xcurrent, ycurrent, currentaddr}) end
 
         if pixmap then
             local overlaysize = math.floor(pixmapsize/zoom)
@@ -401,7 +422,9 @@ while true do
         if is_hovering then
             local hoveraddr = currentaddr + x_interval*xdiff + y_interval*ydiff
             local hovervalue = memory.readbyte(hoveraddr+2)
-            show_tiledata(2, 10, "Hover: ", {xdiff*coord_mult + xcurrent, ydiff*coord_mult + ycurrent, hoveraddr})
+            if hud then
+                show_tiledata(2, 10, "Hover: ", {xdiff*coord_mult + xcurrent, ydiff*coord_mult + ycurrent, hoveraddr})
+            end
             if keycheck("teleport") then shift_coords(xdiff*coord_mult, ydiff*coord_mult) end
             if keycheck("flash") then
                 if flash.value == hovervalue then flash.value = nil
