@@ -54,7 +54,7 @@ colormap = {    -- presets: "unknown", "door", "on_contact", "on_interact", "wal
 }
 
 print("Golden Sun 1 & 2 Map Overlay Script")
-print("Updated March 25, 2021")
+print("Updated March 26, 2021")
 print("")
 print("shift + O\t\ttoggle hex overlay")
 print("shift + P\t\ttoggle pixel overlay")
@@ -261,6 +261,19 @@ function show_tiledata(x, y, name, data)  -- data is a table {x, y, addr}
     )
 end
 
+function highlight(x, y, text, color, height)
+    if bit.arshift(color,8) == 0 and color ~= flash.color then
+        color = 0xFFFFFF80
+    end
+    local x, y = x-height, y-height
+    gui.text(x, y, text, color)
+    local x1, y1, x2, y2 = x-2, y-1, x+8, y+7
+    gui.box(x1, y1, x2, y2, 0, 0xFFFFFFFF)
+    gui.line(x1, y2, x1+height, y2+height, 0xFFFFFFFF)
+    gui.line(x2, y1, x2+height, y1+height, 0xFFFFFFFF)
+    gui.line(x2, y2, x2+height, y2+height, 0xFFFFFFFF)
+end
+
 function index(array, value)
     for k,v in pairs(array) do
         if v == value then return k end
@@ -290,19 +303,30 @@ function get_height(tileaddr)
     local pc_height = bit.arshift(memory.readwordsigned(pc_data_addr + 0x16), 4)
     local h_index = get_h_index(tileaddr)
     local tile_type, h1, h2, h3 = unpack(memory.readbyterange(0x0202C000 + 4*h_index, 4))
-    h1, h2, h3 = bit.arshift(signed(h1, 8),1), bit.arshift(signed(h2, 8),1), bit.arshift(signed(h3, 8),1)
     tile_type = bit.band(tile_type, 0xF)
-    if tile_type == 0 then return h1
-    elseif index({1,2,8,9}, tile_type) then return bit.arshift(h1 + h2, 1)
-    elseif index({3,4}, tile_type) then
-        if pc_height < math.max(h1, h2) then return math.min(h1, h2)
-        else return math.max(h1, h2)
-        end
-    elseif tile_type == 7 then return h2
-    elseif index({10,11,12,13,15}, tile_type) then return bit.arshift(2*h1 + h2 + h3, 2)
-    elseif tile_type == 14 then return bit.arshift(h1 + h2 + 2*h3, 2)
-    else return h1
-    end
+    h1, h2, h3 = signed(h1, 8), signed(h2, 8), signed(h3, 8)
+    local h4 = bit.arshift(h1 + h2, 1)
+    local h5 = math.max(h1, h2)
+    if pc_height < bit.arshift(h5,1) then h5 = math.min(h1, h2) end
+    local hmap = {
+        [0x0] = h1,  -- floor
+        [0x1] = h4,  -- left/right stairs
+        [0x2] = h4,  -- up/down stairs
+        [0x3] = h5,  -- slanted wall
+        [0x4] = h5,  -- slanted wall
+        [0x5] = h1,  -- ?
+        [0x6] = h1,  -- ?
+        [0x7] = h2,  -- circle
+        [0x8] = h4,  -- left/right half split
+        [0x9] = h4,  -- up/down half split
+        [0xA] = h2,  -- triangle
+        [0xB] = h2,  -- triangle
+        [0xC] = h2,  -- triangle
+        [0xD] = h2,  -- triangle
+        [0xE] = h3,  -- 4-corners: 1,2,3,3
+        [0xF] = h1,  -- 4-corners: 1,1,2,3
+    }
+    return bit.arshift(hmap[tile_type], 1)
 end
 
 function height_text(x, y, text, color, height)
@@ -310,9 +334,6 @@ function height_text(x, y, text, color, height)
     if height == 0 then gui.text(x, y, text, color); return
     elseif height > 0 then step = 1
     else step = -1
-    end
-    if bit.rshift(color, 8) == 0 and color ~= flash.color then
-        color = 0xFFFFFFE0
     end
     for i=0,height,step do
         gui.text(x-i, y-i, text, color, 0xE0)
@@ -364,6 +385,7 @@ while true do
             coord_mult = 0x100000
         end
         local xcurrent, ycurrent = memory.readdword(xaddr), memory.readdword(yaddr)
+        local pc_height = get_height(currentaddr)
 
         if pixmap then
             local overlaysize = math.floor(pixmapsize/zoom)
@@ -385,29 +407,30 @@ while true do
         end
 
         if hexmap then
-            local pc_data_addr = memory.readdword(GAME.pcdata_pntr)
-            local pc_height = bit.arshift(memory.readwordsigned(pc_data_addr + 0x16), 4)
+            is_hovering, xdiff, ydiff = hover_check(center, {12, 10}, hexmapsize)
+            local deferred = {}
             for y=-hexmapsize,hexmapsize do
                 for x=-hexmapsize,hexmapsize do
                     local tileaddr = currentaddr + y_interval*y + x_interval*x
                     local tilevalue = memory.readbyte(tileaddr + 2)
                     local xpos, ypos = center[1] + 12*x - 3, center[2] + 10*y - 4
                     local color = colors[tilevalue]
+                    local height = 0
                     if heightmap.active and not overworld then
-                        local height = get_height(tileaddr)
+                        height = get_height(tileaddr)
                         if heightmap.relative then height = height - pc_height end
                         if not heightmap.show_neg then height = math.max(0, height) end
-                        height_text(xpos, ypos, hex(tilevalue, 2), color, height)
-                        xpos, ypos = xpos - height, ypos - height
-                    else
-                        gui.text(xpos, ypos, hex(tilevalue, 2), color)
+                        if height ~= 0 and bit.rshift(color, 8) == 0 and color ~= flash.color then
+                            color = 0xFFFFFFE0
+                        end
                     end
-                    if x == 0 and y == 0 then
-                        gui.box(xpos-2, ypos-1, xpos+8, ypos+7, 0, 0xFFFFFFFF)
+                    height_text(xpos, ypos, hex(tilevalue, 2), color, height)
+                    if (x == 0 and y == 0) or (x == xdiff and y == ydiff) then
+                        table.insert(deferred, {xpos, ypos, hex(tilevalue, 2), color, height})
                     end
                 end
             end
-            is_hovering, xdiff, ydiff = hover_check(center, {12, 10}, hexmapsize)
+            for _,args in pairs(deferred) do highlight(unpack(args)) end
         end
 
         if hud then show_tiledata(2, 2, "Tile:  ", {xcurrent, ycurrent, currentaddr}) end
